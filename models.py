@@ -20,8 +20,12 @@ import numpy as np
 import math
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 
-
+# 
 def modulate(x, shift, scale):
+    """
+    调制函数 - 对输入特征进行仿射变换
+    输入特征乘以比例因子并加上偏移量，用于自适应层归一化
+    """
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
@@ -31,7 +35,8 @@ def modulate(x, shift, scale):
 
 class TimestepEmbedder(nn.Module):
     """
-    将标量时间步嵌入为向量表示。
+    时间步嵌入器 - 将标量时间步嵌入为向量表示
+    作用：将扩散过程中的时间步转换为模型可以处理的高维特征向量
     """
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
@@ -71,7 +76,8 @@ class TimestepEmbedder(nn.Module):
 
 class LabelEmbedder(nn.Module):
     """
-    将类别标签嵌入为向量表示。还处理用于无分类器引导的标签丢弃。
+    标签嵌入器 - 将类别标签嵌入为向量表示
+    作用：将分类标签转换为高维特征向量，并支持分类器引导中的标签丢弃技术
     """
     def __init__(self, num_classes, hidden_size, dropout_prob):
         super().__init__()
@@ -105,7 +111,8 @@ class LabelEmbedder(nn.Module):
 
 class DiTBlock(nn.Module):
     """
-    带有自适应层归一化零（adaLN-Zero）条件的DiT块。
+    DiT块 - 带有自适应层归一化零（adaLN-Zero）条件的Transformer块
+    作用：DiT模型的基本构建单元，结合了自注意力机制和前馈网络，通过条件信息调制特征
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -129,7 +136,8 @@ class DiTBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    DiT的最终层。
+    最终层 - DiT模型的输出层
+    作用：将最终的特征表示转换为目标图像空间，应用最后的自适应层归一化并线性映射到输出通道
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -149,7 +157,8 @@ class FinalLayer(nn.Module):
 
 class DiT(nn.Module):
     """
-    具有Transformer骨干的扩散模型。
+    DiT模型 - 具有Transformer骨干的扩散模型
+    作用：整合所有组件的主模型，实现从潜空间到图像空间的扩散过程，支持条件生成和无分类器引导
     """
     def __init__(
         self,
