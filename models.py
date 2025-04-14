@@ -9,6 +9,11 @@
 # MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
 # --------------------------------------------------------
 
+"""
+此脚本定义了DiT (Diffusion Transformer) 模型的架构
+主要功能：定义了DiT模型的各种组件和配置，包括Transformer模块、时间步嵌入、标签嵌入等
+"""
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -21,12 +26,12 @@ def modulate(x, shift, scale):
 
 
 #################################################################################
-#               Embedding Layers for Timesteps and Class Labels                 #
+#               时间步和类别标签的嵌入层                                           #
 #################################################################################
 
 class TimestepEmbedder(nn.Module):
     """
-    Embeds scalar timesteps into vector representations.
+    将标量时间步嵌入为向量表示。
     """
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
@@ -40,12 +45,12 @@ class TimestepEmbedder(nn.Module):
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
         """
-        Create sinusoidal timestep embeddings.
-        :param t: a 1-D Tensor of N indices, one per batch element.
-                          These may be fractional.
-        :param dim: the dimension of the output.
-        :param max_period: controls the minimum frequency of the embeddings.
-        :return: an (N, D) Tensor of positional embeddings.
+        创建正弦时间步嵌入。
+        :param t: 一个1-D张量，其中包含N个索引，每个批次元素一个。
+                          这些可能是小数。
+        :param dim: 输出的维度。
+        :param max_period: 控制嵌入的最小频率。
+        :return: 一个(N, D)形状的位置嵌入张量。
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
@@ -66,7 +71,7 @@ class TimestepEmbedder(nn.Module):
 
 class LabelEmbedder(nn.Module):
     """
-    Embeds class labels into vector representations. Also handles label dropout for classifier-free guidance.
+    将类别标签嵌入为向量表示。还处理用于无分类器引导的标签丢弃。
     """
     def __init__(self, num_classes, hidden_size, dropout_prob):
         super().__init__()
@@ -77,7 +82,7 @@ class LabelEmbedder(nn.Module):
 
     def token_drop(self, labels, force_drop_ids=None):
         """
-        Drops labels to enable classifier-free guidance.
+        丢弃标签以启用无分类器引导。
         """
         if force_drop_ids is None:
             drop_ids = torch.rand(labels.shape[0], device=labels.device) < self.dropout_prob
@@ -95,12 +100,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core DiT Model                                #
+#                                 核心DiT模型                                    #
 #################################################################################
 
 class DiTBlock(nn.Module):
     """
-    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    带有自适应层归一化零（adaLN-Zero）条件的DiT块。
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -124,7 +129,7 @@ class DiTBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    The final layer of DiT.
+    DiT的最终层。
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -144,7 +149,7 @@ class FinalLayer(nn.Module):
 
 class DiT(nn.Module):
     """
-    Diffusion model with a Transformer backbone.
+    具有Transformer骨干的扩散模型。
     """
     def __init__(
         self,
@@ -170,7 +175,7 @@ class DiT(nn.Module):
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         num_patches = self.x_embedder.num_patches
-        # Will use fixed sin-cos embedding:
+        # 将使用固定的正弦-余弦嵌入:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
@@ -180,7 +185,7 @@ class DiT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Initialize transformer layers:
+        # 初始化transformer层:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
@@ -188,28 +193,28 @@ class DiT(nn.Module):
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
 
-        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        # 通过正弦-余弦嵌入初始化（并冻结）pos_embed:
         pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        # 像nn.Linear一样初始化patch_embed（而不是nn.Conv2d）:
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        # Initialize label embedding table:
+        # 初始化标签嵌入表:
         nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
 
-        # Initialize timestep embedding MLP:
+        # 初始化时间步嵌入MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DiT blocks:
+        # 将DiT块中的adaLN调制层置零:
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
-        # Zero-out output layers:
+        # 将输出层置零:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
@@ -238,12 +243,12 @@ class DiT(nn.Module):
 
     def forward(self, x, t, y):
         """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
+        DiT的前向传播。
+        x: (N, C, H, W) 空间输入的张量（图像或图像的潜在表示）
+        t: (N,) 扩散时间步的张量
+        y: (N,) 类别标签的张量
         """
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), 其中 T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         y = self.y_embedder(y, self.training)    # (N, D)
         c = t + y                                # (N, D)
@@ -255,15 +260,15 @@ class DiT(nn.Module):
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         """
-        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
+        DiT的前向传播，但也为无分类器引导批处理无条件前向传播。
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         model_out = self.forward(combined, t, y)
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
+        # 出于精确再现性的原因，默认情况下我们仅对三个通道应用无分类器引导。
+        # 无分类器引导的标准方法是将其应用于所有通道。
+        # 可以通过取消注释以下行并注释掉后续行来实现。
         # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
         eps, rest = model_out[:, :3], model_out[:, 3:]
         cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
@@ -273,19 +278,19 @@ class DiT(nn.Module):
 
 
 #################################################################################
-#                   Sine/Cosine Positional Embedding Functions                  #
+#                   正弦/余弦位置嵌入函数                                         #
 #################################################################################
 # https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0):
     """
-    grid_size: int of the grid height and width
-    return:
-    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    grid_size: 网格高度和宽度的整数
+    返回:
+    pos_embed: [grid_size*grid_size, embed_dim] 或 [1+grid_size*grid_size, embed_dim]（有或没有cls_token）
     """
     grid_h = np.arange(grid_size, dtype=np.float32)
     grid_w = np.arange(grid_size, dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+    grid = np.meshgrid(grid_w, grid_h)  # 这里w先走
     grid = np.stack(grid, axis=0)
 
     grid = grid.reshape([2, 1, grid_size, grid_size])
@@ -298,7 +303,7 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     assert embed_dim % 2 == 0
 
-    # use half of dimensions to encode grid_h
+    # 使用一半维度编码grid_h
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
@@ -308,8 +313,8 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
-    embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
+    embed_dim: 每个位置的输出维度
+    pos: 要编码的位置列表：大小(M,)
     out: (M, D)
     """
     assert embed_dim % 2 == 0
@@ -318,7 +323,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     omega = 1. / 10000**omega  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
-    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+    out = np.einsum('m,d->md', pos, omega)  # (M, D/2), 外积
 
     emb_sin = np.sin(out) # (M, D/2)
     emb_cos = np.cos(out) # (M, D/2)
@@ -328,7 +333,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 
 #################################################################################
-#                                   DiT Configs                                  #
+#                                   DiT配置                                      #
 #################################################################################
 
 def DiT_XL_2(**kwargs):

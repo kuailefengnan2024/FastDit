@@ -5,10 +5,11 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-A minimal training script for DiT.
+此脚本用于训练DiT（扩散Transformer）模型
+主要功能：实现了DiT模型的完整训练流程，包括数据加载、模型初始化、训练循环和检查点保存
 """
 import torch
-# the first flag below was False when we tested this script but True makes A100 training a lot faster:
+# 当我们测试这个脚本时，下面的第一个标志是False，但在A100上设为True可以使训练速度更快:
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 import torch.distributed as dist
@@ -34,26 +35,26 @@ from diffusers.models import AutoencoderKL
 
 
 #################################################################################
-#                             Training Helper Functions                         #
+#                             训练辅助函数                                       #
 #################################################################################
 
 @torch.no_grad()
 def update_ema(ema_model, model, decay=0.9999):
     """
-    Step the EMA model towards the current model.
+    将EMA模型向当前模型迭代更新。
     """
     ema_params = OrderedDict(ema_model.named_parameters())
     model_params = OrderedDict(model.named_parameters())
 
     for name, param in model_params.items():
         name = name.replace("module.", "")
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
+        # TODO: 考虑只对需要梯度的参数应用，以避免pos_embed的小数值变化
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
 
 
 def requires_grad(model, flag=True):
     """
-    Set requires_grad flag for all parameters in a model.
+    为模型中的所有参数设置requires_grad标志。
     """
     for p in model.parameters():
         p.requires_grad = flag
@@ -61,7 +62,7 @@ def requires_grad(model, flag=True):
 
 def create_logger(logging_dir):
     """
-    Create a logger that writes to a log file and stdout.
+    创建一个记录到日志文件和标准输出的记录器。
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -75,7 +76,7 @@ def create_logger(logging_dir):
 
 def center_crop_arr(pil_image, image_size):
     """
-    Center cropping implementation from ADM.
+    来自ADM的中心裁剪实现。
     https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
     """
     while min(*pil_image.size) >= 2 * image_size:
@@ -104,7 +105,7 @@ class CustomDataset(Dataset):
 
     def __len__(self):
         assert len(self.features_files) == len(self.labels_files), \
-            "Number of feature files and label files should be same"
+            "特征文件和标签文件的数量应该相同"
         return len(self.features_files)
 
     def __getitem__(self, idx):
@@ -117,50 +118,50 @@ class CustomDataset(Dataset):
 
 
 #################################################################################
-#                                  Training Loop                                #
+#                                  训练循环                                      #
 #################################################################################
 
 def main(args):
     """
-    Trains a new DiT model.
+    训练新的DiT模型。
     """
-    assert torch.cuda.is_available(), "Training currently requires at least one GPU."
+    assert torch.cuda.is_available(), "训练当前至少需要一个GPU。"
 
-    # Setup accelerator:
+    # 设置加速器:
     accelerator = Accelerator()
     device = accelerator.device
 
-    # Setup an experiment folder:
+    # 设置实验文件夹:
     if accelerator.is_main_process:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        os.makedirs(args.results_dir, exist_ok=True)  # 创建结果文件夹（包含所有实验子文件夹）
         experiment_index = len(glob(f"{args.results_dir}/*"))
-        model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
-        checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
+        model_string_name = args.model.replace("/", "-")  # 例如，DiT-XL/2 --> DiT-XL-2（用于命名文件夹）
+        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # 创建实验文件夹
+        checkpoint_dir = f"{experiment_dir}/checkpoints"  # 存储保存的模型检查点
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
-        logger.info(f"Experiment directory created at {experiment_dir}")
+        logger.info(f"实验目录创建于 {experiment_dir}")
 
-    # Create model:
-    assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
+    # 创建模型:
+    assert args.image_size % 8 == 0, "图像大小必须能被8整除（用于VAE编码器）。"
     latent_size = args.image_size // 8
     model = DiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes
     )
-    # Note that parameter initialization is done within the DiT constructor
+    # 注意，参数初始化是在DiT构造函数内完成的
     model = model.to(device)
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
+    ema = deepcopy(model).to(device)  # 创建模型的EMA副本，用于训练后使用
     requires_grad(ema, False)
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
+    diffusion = create_diffusion(timestep_respacing="")  # 默认：1000步，线性噪声调度
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     if accelerator.is_main_process:
-        logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        logger.info(f"DiT参数: {sum(p.numel() for p in model.parameters()):,}")
 
-    # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
+    # 设置优化器（在我们的论文中，我们使用了默认的Adam参数beta=(0.9, 0.999)和1e-4的恒定学习率）:
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
-    # Setup data:
+    # 设置数据:
     features_dir = f"{args.feature_path}/imagenet256_features"
     labels_dir = f"{args.feature_path}/imagenet256_labels"
     dataset = CustomDataset(features_dir, labels_dir)
@@ -173,25 +174,25 @@ def main(args):
         drop_last=True
     )
     if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(dataset):,} images ({args.feature_path})")
+        logger.info(f"数据集包含 {len(dataset):,} 张图像 ({args.feature_path})")
 
-    # Prepare models for training:
-    update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
-    ema.eval()  # EMA model should always be in eval mode
+    # 准备模型进行训练:
+    update_ema(ema, model, decay=0)  # 确保EMA使用同步的权重进行初始化
+    model.train()  # 重要！这启用了用于无分类器引导的嵌入丢弃
+    ema.eval()  # EMA模型应始终处于评估模式
     model, opt, loader = accelerator.prepare(model, opt, loader)
 
-    # Variables for monitoring/logging purposes:
+    # 用于监控/记录的变量:
     train_steps = 0
     log_steps = 0
     running_loss = 0
     start_time = time()
     
     if accelerator.is_main_process:
-        logger.info(f"Training for {args.epochs} epochs...")
+        logger.info(f"训练 {args.epochs} 个周期...")
     for epoch in range(args.epochs):
         if accelerator.is_main_process:
-            logger.info(f"Beginning epoch {epoch}...")
+            logger.info(f"开始第 {epoch} 个周期...")
         for x, y in loader:
             x = x.to(device)
             y = y.to(device)
@@ -206,26 +207,26 @@ def main(args):
             opt.step()
             update_ema(ema, model)
 
-            # Log loss values:
+            # 记录损失值:
             running_loss += loss.item()
             log_steps += 1
             train_steps += 1
             if train_steps % args.log_every == 0:
-                # Measure training speed:
+                # 测量训练速度:
                 torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
+                # 在所有进程上减少损失历史:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
                 avg_loss = avg_loss.item() / accelerator.num_processes
                 if accelerator.is_main_process:
-                    logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                # Reset monitoring variables:
+                    logger.info(f"(步骤={train_steps:07d}) 训练损失: {avg_loss:.4f}, 训练步数/秒: {steps_per_sec:.2f}")
+                # 重置监控变量:
                 running_loss = 0
                 log_steps = 0
                 start_time = time()
 
-            # Save DiT checkpoint:
+            # 保存DiT检查点:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
                 if accelerator.is_main_process:
                     checkpoint = {
@@ -236,17 +237,17 @@ def main(args):
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    logger.info(f"已将检查点保存到 {checkpoint_path}")
 
-    model.eval()  # important! This disables randomized embedding dropout
-    # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
+    model.eval()  # 重要！这禁用了随机嵌入丢弃
+    # 在评估模式下使用ema（或model）进行任何采样/FID计算/等...
     
     if accelerator.is_main_process:
-        logger.info("Done!")
+        logger.info("完成！")
 
 
 if __name__ == "__main__":
-    # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
+    # 这里的默认参数将训练DiT-XL/2，使用了我们论文中的超参数（除了训练迭代次数）。
     parser = argparse.ArgumentParser()
     parser.add_argument("--feature-path", type=str, default="features")
     parser.add_argument("--results-dir", type=str, default="results")
@@ -256,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=1400)
     parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
+    parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # 选择不影响训练
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=50_000)

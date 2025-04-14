@@ -5,7 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 
 """
-Sample new images from a pre-trained DiT.
+此脚本用于从预训练的DiT模型采样新图像
+主要功能：使用预训练的DiT模型生成新图像样本，并将结果保存为图像文件
 """
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -19,52 +20,52 @@ import argparse
 
 
 def main(args):
-    # Setup PyTorch:
+    # 设置PyTorch:
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if args.ckpt is None:
-        assert args.model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
+        assert args.model == "DiT-XL/2", "只有DiT-XL/2模型可用于自动下载。"
         assert args.image_size in [256, 512]
         assert args.num_classes == 1000
 
-    # Load model:
+    # 加载模型:
     latent_size = args.image_size // 8
     model = DiT_models[args.model](
         input_size=latent_size,
         num_classes=args.num_classes
     ).to(device)
-    # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
+    # 自动下载预训练模型或从train.py加载自定义DiT检查点:
     ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
-    model.eval()  # important!
+    model.eval()  # 重要！
     diffusion = create_diffusion(str(args.num_sampling_steps))
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
 
-    # Labels to condition the model with (feel free to change):
+    # 用于条件化模型的标签（可随意更改）:
     class_labels = [207, 360, 387, 974, 88, 979, 417, 279]
 
-    # Create sampling noise:
+    # 创建采样噪声:
     n = len(class_labels)
     z = torch.randn(n, 4, latent_size, latent_size, device=device)
     y = torch.tensor(class_labels, device=device)
 
-    # Setup classifier-free guidance:
+    # 设置无分类器引导:
     z = torch.cat([z, z], 0)
     y_null = torch.tensor([1000] * n, device=device)
     y = torch.cat([y, y_null], 0)
     model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
 
-    # Sample images:
+    # 采样图像:
     samples = diffusion.p_sample_loop(
         model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
     )
-    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
+    samples, _ = samples.chunk(2, dim=0)  # 移除空类别样本
     samples = vae.decode(samples / 0.18215).sample
 
-    # Save and display images:
+    # 保存并显示图像:
     save_image(samples, "sample.png", nrow=4, normalize=True, value_range=(-1, 1))
 
 
@@ -78,6 +79,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-sampling-steps", type=int, default=250)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ckpt", type=str, default=None,
-                        help="Optional path to a DiT checkpoint (default: auto-download a pre-trained DiT-XL/2 model).")
+                        help="可选的DiT检查点路径（默认：自动下载预训练的DiT-XL/2模型）。")
     args = parser.parse_args()
     main(args)

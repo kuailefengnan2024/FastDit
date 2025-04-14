@@ -1,4 +1,9 @@
-# Modified from OpenAI's diffusion repos
+# 文件功能：提供扩散模型时间步重采样功能
+# 本文件实现了扩散模型时间步的重新采样和间隔调整，允许从原始扩散过程中
+# 选择特定的时间步进行训练或推理，比如DDIM采样。这可以加速采样过程或改变
+# 扩散模型的行为。
+#
+# 修改自OpenAI的扩散模型代码库
 #     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
 #     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
 #     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
@@ -11,22 +16,21 @@ from .gaussian_diffusion import GaussianDiffusion
 
 def space_timesteps(num_timesteps, section_counts):
     """
-    Create a list of timesteps to use from an original diffusion process,
-    given the number of timesteps we want to take from equally-sized portions
-    of the original process.
-    For example, if there's 300 timesteps and the section counts are [10,15,20]
-    then the first 100 timesteps are strided to be 10 timesteps, the second 100
-    are strided to be 15 timesteps, and the final 100 are strided to be 20.
-    If the stride is a string starting with "ddim", then the fixed striding
-    from the DDIM paper is used, and only one section is allowed.
-    :param num_timesteps: the number of diffusion steps in the original
-                          process to divide up.
-    :param section_counts: either a list of numbers, or a string containing
-                           comma-separated numbers, indicating the step count
-                           per section. As a special case, use "ddimN" where N
-                           is a number of steps to use the striding from the
-                           DDIM paper.
-    :return: a set of diffusion steps from the original process to use.
+    从原始扩散过程中创建一个时间步列表，
+    给定我们想要从原始过程的等大小部分中采取的时间步数量。
+    
+    例如，如果有300个时间步，而section_counts是[10,15,20]，
+    那么前100个时间步会被调整为10个时间步，中间100个
+    会被调整为15个时间步，最后100个会被调整为20个时间步。
+    
+    如果步幅是以"ddim"开头的字符串，则使用DDIM论文中的固定步幅，
+    且只允许一个部分。
+    
+    :param num_timesteps: 原始过程中要分割的扩散步骤数。
+    :param section_counts: 可以是数字列表，或包含逗号分隔数字的字符串，
+                         表示每个部分的步骤数。作为一种特殊情况，使用"ddimN"
+                         其中N是步数，使用DDIM论文中的步幅。
+    :return: 要使用的原始过程中的一组扩散步骤。
     """
     if isinstance(section_counts, str):
         if section_counts.startswith("ddim"):
@@ -35,7 +39,7 @@ def space_timesteps(num_timesteps, section_counts):
                 if len(range(0, num_timesteps, i)) == desired_count:
                     return set(range(0, num_timesteps, i))
             raise ValueError(
-                f"cannot create exactly {num_timesteps} steps with an integer stride"
+                f"无法使用整数步幅创建恰好{num_timesteps}个步骤"
             )
         section_counts = [int(x) for x in section_counts.split(",")]
     size_per = num_timesteps // len(section_counts)
@@ -46,7 +50,7 @@ def space_timesteps(num_timesteps, section_counts):
         size = size_per + (1 if i < extra else 0)
         if size < section_count:
             raise ValueError(
-                f"cannot divide section of {size} steps into {section_count}"
+                f"无法将{size}个步骤的部分分成{section_count}个"
             )
         if section_count <= 1:
             frac_stride = 1
@@ -64,10 +68,10 @@ def space_timesteps(num_timesteps, section_counts):
 
 class SpacedDiffusion(GaussianDiffusion):
     """
-    A diffusion process which can skip steps in a base diffusion process.
-    :param use_timesteps: a collection (sequence or set) of timesteps from the
-                          original diffusion process to retain.
-    :param kwargs: the kwargs to create the base diffusion process.
+    一种可以在基本扩散过程中跳过步骤的扩散过程。
+    
+    :param use_timesteps: 从原始扩散过程中保留的时间步集合（序列或集合）。
+    :param kwargs: 创建基本扩散过程的关键字参数。
     """
 
     def __init__(self, use_timesteps, **kwargs):
@@ -110,7 +114,7 @@ class SpacedDiffusion(GaussianDiffusion):
         )
 
     def _scale_timesteps(self, t):
-        # Scaling is done by the wrapped model.
+        # 缩放由包装后的模型完成。
         return t
 
 

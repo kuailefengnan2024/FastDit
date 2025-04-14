@@ -1,4 +1,8 @@
-# Modified from OpenAI's diffusion repos
+# 文件功能：扩散模型的实用工具函数
+# 本文件提供了扩散模型所需的各种数学工具函数，包括KL散度计算、
+# 高斯分布的概率密度函数计算等。这些函数是扩散模型理论基础的核心组件。
+#
+# 修改自OpenAI的扩散模型代码库
 #     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
 #     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
 #     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
@@ -9,19 +13,19 @@ import numpy as np
 
 def normal_kl(mean1, logvar1, mean2, logvar2):
     """
-    Compute the KL divergence between two gaussians.
-    Shapes are automatically broadcasted, so batches can be compared to
-    scalars, among other use cases.
+    计算两个高斯分布之间的KL散度。
+    形状可以自动广播，因此批次可以与标量进行比较，
+    以及其他用例。
     """
     tensor = None
     for obj in (mean1, logvar1, mean2, logvar2):
         if isinstance(obj, th.Tensor):
             tensor = obj
             break
-    assert tensor is not None, "at least one argument must be a Tensor"
+    assert tensor is not None, "至少有一个参数必须是张量"
 
-    # Force variances to be Tensors. Broadcasting helps convert scalars to
-    # Tensors, but it does not work for th.exp().
+    # 强制方差为张量。广播有助于将标量转换为张量，
+    # 但对于th.exp()不起作用。
     logvar1, logvar2 = [
         x if isinstance(x, th.Tensor) else th.tensor(x).to(tensor)
         for x in (logvar1, logvar2)
@@ -38,19 +42,18 @@ def normal_kl(mean1, logvar1, mean2, logvar2):
 
 def approx_standard_normal_cdf(x):
     """
-    A fast approximation of the cumulative distribution function of the
-    standard normal.
+    标准正态分布累积分布函数的快速近似。
     """
     return 0.5 * (1.0 + th.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * th.pow(x, 3))))
 
 
 def continuous_gaussian_log_likelihood(x, *, means, log_scales):
     """
-    Compute the log-likelihood of a continuous Gaussian distribution.
-    :param x: the targets
-    :param means: the Gaussian mean Tensor.
-    :param log_scales: the Gaussian log stddev Tensor.
-    :return: a tensor like x of log probabilities (in nats).
+    计算连续高斯分布的对数似然。
+    :param x: 目标
+    :param means: 高斯均值张量。
+    :param log_scales: 高斯对数标准差张量。
+    :return: 与x形状相同的对数概率张量（以奈特为单位）。
     """
     centered_x = x - means
     inv_stdv = th.exp(-log_scales)
@@ -61,13 +64,11 @@ def continuous_gaussian_log_likelihood(x, *, means, log_scales):
 
 def discretized_gaussian_log_likelihood(x, *, means, log_scales):
     """
-    Compute the log-likelihood of a Gaussian distribution discretizing to a
-    given image.
-    :param x: the target images. It is assumed that this was uint8 values,
-              rescaled to the range [-1, 1].
-    :param means: the Gaussian mean Tensor.
-    :param log_scales: the Gaussian log stddev Tensor.
-    :return: a tensor like x of log probabilities (in nats).
+    计算离散化到给定图像的高斯分布的对数似然。
+    :param x: 目标图像。假设这是uint8值，重新缩放到[-1, 1]范围。
+    :param means: 高斯均值张量。
+    :param log_scales: 高斯对数标准差张量。
+    :return: 与x形状相同的对数概率张量（以奈特为单位）。
     """
     assert x.shape == means.shape == log_scales.shape
     centered_x = x - means

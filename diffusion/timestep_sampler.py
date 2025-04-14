@@ -1,4 +1,8 @@
-# Modified from OpenAI's diffusion repos
+# 文件功能：扩散模型时间步采样器的实现
+# 本文件实现了多种时间步采样策略，用于训练扩散模型时的时间步选择。
+# 包括均匀采样和基于损失加权的采样方法，以减少训练过程中的方差。
+#
+# 修改自OpenAI的扩散模型代码库
 #     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
 #     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
 #     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
@@ -12,43 +16,42 @@ import torch.distributed as dist
 
 def create_named_schedule_sampler(name, diffusion):
     """
-    Create a ScheduleSampler from a library of pre-defined samplers.
-    :param name: the name of the sampler.
-    :param diffusion: the diffusion object to sample for.
+    从预定义的采样器库中创建一个ScheduleSampler。
+    :param name: 采样器的名称。
+    :param diffusion: 要采样的扩散对象。
     """
     if name == "uniform":
         return UniformSampler(diffusion)
     elif name == "loss-second-moment":
         return LossSecondMomentResampler(diffusion)
     else:
-        raise NotImplementedError(f"unknown schedule sampler: {name}")
+        raise NotImplementedError(f"未知的调度采样器: {name}")
 
 
 class ScheduleSampler(ABC):
     """
-    A distribution over timesteps in the diffusion process, intended to reduce
-    variance of the objective.
-    By default, samplers perform unbiased importance sampling, in which the
-    objective's mean is unchanged.
-    However, subclasses may override sample() to change how the resampled
-    terms are reweighted, allowing for actual changes in the objective.
+    扩散过程中时间步的分布，旨在减少目标函数的方差。
+    
+    默认情况下，采样器执行无偏重要性采样，其中目标的均值保持不变。
+    然而，子类可以覆盖sample()方法来改变重新采样项的重新加权方式，
+    从而允许目标函数实际发生变化。
     """
 
     @abstractmethod
     def weights(self):
         """
-        Get a numpy array of weights, one per diffusion step.
-        The weights needn't be normalized, but must be positive.
+        获取每个扩散步骤的权重的numpy数组。
+        权重不需要归一化，但必须为正值。
         """
 
     def sample(self, batch_size, device):
         """
-        Importance-sample timesteps for a batch.
-        :param batch_size: the number of timesteps.
-        :param device: the torch device to save to.
-        :return: a tuple (timesteps, weights):
-                 - timesteps: a tensor of timestep indices.
-                 - weights: a tensor of weights to scale the resulting losses.
+        对一批数据进行时间步的重要性采样。
+        :param batch_size: 时间步的数量。
+        :param device: 保存的torch设备。
+        :return: 一个元组(timesteps, weights):
+                 - timesteps: 时间步索引的张量。
+                 - weights: 用于缩放结果损失的权重张量。
         """
         w = self.weights()
         p = w / np.sum(w)
@@ -71,13 +74,13 @@ class UniformSampler(ScheduleSampler):
 class LossAwareSampler(ScheduleSampler):
     def update_with_local_losses(self, local_ts, local_losses):
         """
-        Update the reweighting using losses from a model.
-        Call this method from each rank with a batch of timesteps and the
-        corresponding losses for each of those timesteps.
-        This method will perform synchronization to make sure all of the ranks
-        maintain the exact same reweighting.
-        :param local_ts: an integer Tensor of timesteps.
-        :param local_losses: a 1D Tensor of losses.
+        使用模型的损失更新重新加权。
+        
+        从每个进程调用此方法，传入一批时间步和对应于每个时间步的损失。
+        此方法将执行同步，以确保所有进程保持完全相同的重新加权。
+        
+        :param local_ts: 时间步的整数张量。
+        :param local_losses: 损失的1D张量。
         """
         batch_sizes = [
             th.tensor([0], dtype=th.int32, device=local_ts.device)
@@ -88,7 +91,7 @@ class LossAwareSampler(ScheduleSampler):
             th.tensor([len(local_ts)], dtype=th.int32, device=local_ts.device),
         )
 
-        # Pad all_gather batches to be the maximum batch size.
+        # 将all_gather批次填充到最大批次大小。
         batch_sizes = [x.item() for x in batch_sizes]
         max_bs = max(batch_sizes)
 
@@ -105,15 +108,16 @@ class LossAwareSampler(ScheduleSampler):
     @abstractmethod
     def update_with_all_losses(self, ts, losses):
         """
-        Update the reweighting using losses from a model.
-        Sub-classes should override this method to update the reweighting
-        using losses from the model.
-        This method directly updates the reweighting without synchronizing
-        between workers. It is called by update_with_local_losses from all
-        ranks with identical arguments. Thus, it should have deterministic
-        behavior to maintain state across workers.
-        :param ts: a list of int timesteps.
-        :param losses: a list of float losses, one per timestep.
+        使用模型的损失更新重新加权。
+        
+        子类应覆盖此方法，使用模型的损失更新重新加权。
+        
+        此方法直接更新重新加权，而不在工作进程之间同步。
+        它由所有等级的update_with_local_losses调用，参数相同。
+        因此，它应具有确定性行为，以维持跨工作者的状态。
+        
+        :param ts: 整数时间步列表。
+        :param losses: 浮点损失列表，每个时间步一个。
         """
 
 
@@ -139,7 +143,7 @@ class LossSecondMomentResampler(LossAwareSampler):
     def update_with_all_losses(self, ts, losses):
         for t, loss in zip(ts, losses):
             if self._loss_counts[t] == self.history_per_term:
-                # Shift out the oldest loss term.
+                # 移出最旧的损失项。
                 self._loss_history[t, :-1] = self._loss_history[t, 1:]
                 self._loss_history[t, -1] = loss
             else:
